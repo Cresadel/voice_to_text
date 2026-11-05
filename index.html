@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lecture Notes – Voice to Text</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></symbol>
+  <symbol id="stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/></symbol>
+  <symbol id="folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></symbol>
+  <symbol id="file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5zM14 3v5h5M9 13h6M9 17h6"/></symbol>
+  <symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></symbol>
+  <symbol id="down" viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 20h16"/></symbol>
+  <symbol id="trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+  <symbol id="list" viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+  <symbol id="moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></symbol>
+  <symbol id="pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4zM13.5 6.5l4 4"/></symbol>
+</svg>
+
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="brand"><div class="logo"><svg class="i"><use href="#pen"/></svg></div><b>Lecture Notes</b></div>
+    <div class="tools">
+      <button class="btn" id="openDrawer"><svg class="i"><use href="#folder"/></svg>My notes</button>
+      <button class="icon-btn" id="theme" aria-label="Toggle dark mode"><svg class="i"><use href="#moon"/></svg></button>
+    </div>
+  </header>
+
+  <main class="page">
+    <p class="warn" id="warn"></p>
+    <section class="card hero">
+      <h1>Record and transcribe your lecture</h1>
+      <p class="sub">Choose a language, press start, and speak. Your words turn into notes.</p>
+      <div class="chips" id="langOpts" role="radiogroup" aria-label="Spoken language"></div>
+      <select id="lang" hidden aria-hidden="true"></select>
+      <button type="button" class="rec-btn" id="micBtn"><svg class="i" id="micIcon"><use href="#mic"/></svg><span id="micLbl">Start recording</span></button>
+      <div class="timer" id="timer">00:00</div>
+      <div class="status" id="status">Ready to listen</div>
+      <div class="meter" aria-hidden="true" title="Mic level"><i id="level"></i></div>
+    </section>
+
+    <section class="card editor">
+      <div class="bar">
+        <input id="title" placeholder="Untitled lecture" aria-label="Note title" maxlength="80">
+        <select id="move" aria-label="Move note to folder" title="Move to folder"></select>
+        <button class="btn" id="bullets" aria-label="Bullets"><svg class="i"><use href="#list"/></svg><span class="lb">Bullets</span></button>
+        <button class="btn" id="copyBtn" aria-label="Copy"><svg class="i"><use href="#copy"/></svg><span class="lb">Copy</span></button>
+        <button class="btn" id="dl" aria-label="Download"><svg class="i"><use href="#down"/></svg><span class="lb">Download</span></button>
+        <button class="btn danger" id="del" aria-label="Delete note"><svg class="i"><use href="#trash"/></svg></button>
+      </div>
+      <div class="interim" id="interim" aria-live="polite"></div>
+      <textarea id="text" placeholder="Your transcript will appear here. You can also type or edit anything."></textarea>
+      <div class="foot"><span id="count">0 words</span><span id="saved">Saved automatically</span></div>
+    </section>
+  </main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="My notes">
+  <div class="dh"><h2>My notes</h2><button class="icon-btn" id="closeDrawer" aria-label="Close"><svg class="i"><use href="#x"/></svg></button></div>
+  <div class="sh"><span>Folders</span><button class="icon-btn sm" id="addF" aria-label="Add folder"><svg class="i"><use href="#plus"/></svg></button></div>
+  <ul id="folders"></ul>
+  <div class="sh"><span id="fname">Notes</span><button class="icon-btn sm" id="addN" aria-label="New note"><svg class="i"><use href="#plus"/></svg></button></div>
+  <ul id="notes"></ul>
+  <p class="tip">Use the download icon on a folder to get all its notes in one file.</p>
+</aside>
+
+<dialog id="langDlg">
+  <h2>Which language will the lecture be in?</h2>
+  <p>The browser can’t guess the language by itself, so choose one first. Bisaya uses the Filipino voice engine, so some words may come out wrong.</p>
+  <div class="grid" id="langGrid"></div>
+</dialog>
+<div class="toast" id="toast" role="status"></div>
+<script src="script.js"></script>
+</body>
+</html>
