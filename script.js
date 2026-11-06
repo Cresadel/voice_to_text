@@ -1,6 +1,6 @@
 (function(){
   var $=function(id){return document.getElementById(id)};
-  var text=$('text'),title=$('title'),interim=$('interim'),statusEl=$('status'),mic=$('micBtn'),app=$('app'),move=$('move'),langSel=$('lang');
+  var text=$('text'),title=$('title'),interim=$('interim'),statusEl=$('status'),mic=$('micBtn'),app=$('app'),move=$('move'),readBtn=$('readBtn'),readLbl=$('readLbl');
   var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   var rec=null,listening=false,wantStop=false,startedAt=0,elapsed=0,tick=null,lastFinal=0;
 
@@ -10,34 +10,138 @@
     warn('Voice recognition needs a local server. In VS Code install “Live Server”, right-click index.html and choose “Open with Live Server”, then use the localhost link. Opening the file directly (file://) blocks the microphone.');
   }
 
-  /* ---------- languages ---------- */
-  var LANGS=[['en-US','English'],['fil-PH','Filipino (Tagalog)'],['ceb','Bisaya (best effort)']];
-  var ENGINE={'en-US':'en-PH','fil-PH':'fil-PH','ceb':'fil-PH'};
-  LANGS.forEach(function(l){var o=document.createElement('option');o.value=l[0];o.textContent=l[1];langSel.appendChild(o)});
-  var dlg=$('langDlg'),grid=$('langGrid'),langChosen=false;
-  function closeLangDlg(){try{if(dlg.open)dlg.close()}catch(e){}dlg.removeAttribute('open')}
-  function openLangDlg(){
-    if(!dlg)return;
-    if(typeof dlg.showModal==='function'){if(!dlg.open)dlg.showModal()}
-    else dlg.setAttribute('open','');
+  /* ---------- automatic language detection ---------- */
+  var ENGINES={fil:['fil-PH','tl-PH'],en:['en-PH','en-US']};
+  var LANG_LABEL={en:'English',tl:'Tagalog',ceb:'Bisaya',mix:'Mixed'};
+  var activeGroup='fil';
+  var detectBuf=[],lastSwitchAt=0,switchCount=0;
+  var lastLang='',lastLangConf=0,statusBase='Ready to listen',sessionStart=0,sessionCleaned=false;
+
+  function setStatus(t){
+    statusBase=t;
+    var show=lastLang&&(t.indexOf('Listening')===0||t.indexOf('Stopped')===0);
+    statusEl.textContent=show?t+' · '+LANG_LABEL[lastLang]:t;
   }
-  LANGS.forEach(function(l){
-    var b=document.createElement('button');b.type='button';b.textContent=l[1];
-    b.onclick=function(){setLang(l[0]);closeLangDlg();start()};
-    grid.appendChild(b);
-  });
-  function setLang(v){langSel.value=v;langChosen=true;try{localStorage.setItem('ln_lang',v)}catch(e){}renderLang()}
-  function renderLang(){
-    var box=$('langOpts');
-    if(!box.children.length){LANGS.forEach(function(l){
-      var b=document.createElement('button');b.type='button';b.setAttribute('role','radio');b.dataset.v=l[0];b.textContent=l[1];
-      b.onclick=function(){var was=listening;setLang(l[0]);if(was){stop();setTimeout(start,300)}};
-      box.appendChild(b);
-    })}
-    Array.prototype.forEach.call(box.children,function(b){var on=b.dataset.v===langSel.value;b.classList.toggle('on',on);b.setAttribute('aria-checked',on)});
-    
+
+  function wordSet(list,weight){var o={};list.forEach(function(w){o[w]=weight});return o}
+  var SHARED='ang sa ay at si ni kay ako ikaw siya kami tayo kayo sila ito iyon iyan mga na lang ba mag gusto ayaw salamat wala pwede puwede pero din rin'.split(' ');
+  var TAGALOG='ng hindi po opo naman kasi kaya daw raw lamang mayroon magandang mabuti ngayon bukas kahapon ano sino saan bakit paano kailan ilan magkano ko mo yan yung kumain'.split(' ');
+  var BISAYA='nga ug dili naa adunay nako nimo niya namo ninyo nila akoa imoha iyaha kini kana kadtong unsa kinsa asa kanus-a ngano giunsa pila tagpila mao kon ganahan maayo nindot karon kakaroon ugma gahapon palihug kaayo sad pud sab lagi diay bitaw ambot ari adto dinhi didto unsaon buhat lakaw kaon inom tulog mata eskwela trabaho kuan tawo balay adlaw buntag gabii pagkaon eskwelahan'.split(' ');
+  var ENGLISH='the is are was were and of to in that this with for on you we they he she have has had not no what how why can could will would should because about from at as be been being do does did so if but or my your our their there here when where who which then than also into more most some any only just very hi hello hey good morning afternoon evening night today tomorrow yesterday now going gonna want need know think see say said tell talk discuss class lecture lesson example question answer okay ok yes yeah right well really actually maybe probably please thank thanks welcome everyone people student students teacher professor subject topic chapter page number first second third next last time day week year before after while during through between under over again still even much many lot little big small new old same different important remember understand follow start finish continue write read speak listen open close look find help work study learn teach school university college dog cat book pen food water house friend family dont cant wont im ive ill id youre theyre weve isnt arent didnt doesnt couldnt wouldnt shouldnt thats whats lets hes shes its'.split(' ');
+  var W_SHARED=wordSet(SHARED,1),W_TAGALOG=wordSet(TAGALOG,2),W_BISAYA=wordSet(BISAYA,2),W_ENGLISH=wordSet(ENGLISH,1);
+
+  function words(s){return (s.toLowerCase().replace(/['\u2019]/g,'').match(/[a-z\u00e0-\u00ff\u00f1]+/g)||[])}
+  function wordScore(list,set){var n=0;for(var i=0;i<list.length;i++)n+=(set[list[i]]||0);return n}
+  function altScore(s){
+    var w=words(s);
+    if(lastLang==='ceb')return wordScore(w,W_BISAYA)*2+wordScore(w,W_SHARED);
+    if(lastLang==='tl')return wordScore(w,W_TAGALOG)*2+wordScore(w,W_SHARED);
+    if(lastLang==='mix')return wordScore(w,W_ENGLISH)+Math.max(wordScore(w,W_TAGALOG),wordScore(w,W_BISAYA))*2+wordScore(w,W_SHARED);
+    if(lastLang==='en'||activeGroup==='en')return wordScore(w,W_ENGLISH);
+    return 0;
   }
-  langSel.onchange=function(){setLang(this.value);if(listening){stop();setTimeout(start,300)}};
+  function detectLanguage(s){
+    var w=words(s);
+    if(w.length<6)return null;
+    var shared=wordScore(w,W_SHARED);
+    var en=wordScore(w,W_ENGLISH);
+    var tl=wordScore(w,W_TAGALOG)+shared;
+    var ceb=wordScore(w,W_BISAYA)+shared;
+    var fil=Math.max(tl,ceb);
+    var markers=en+fil;
+    if(!markers)return {group:activeGroup,lang:activeGroup==='en'?'en':'tl',conf:0,langConf:0,markers:0,total:w.length,en:en,tl:tl,ceb:ceb};
+    var low=Math.min(en,fil),high=Math.max(en,fil);
+    var mixed=low>=3&&high>0&&low/high>=0.6;
+    var group=mixed?'fil':(en>=fil?'en':'fil');
+    var conf=high/markers;
+    var lang=mixed?'mix':(group==='en'?'en':(ceb>=tl&&ceb>0?'ceb':'tl'));
+    var langConf=mixed?low/high:lang==='ceb'?ceb/(ceb+tl+1):lang==='tl'?tl/(ceb+tl+1):conf;
+    return {group:group,lang:lang,conf:conf,langConf:langConf,mixed:mixed,markers:markers,total:w.length,en:en,tl:tl,ceb:ceb};
+  }
+
+  var BISAYA_PHRASES=[
+    [/\bkakaroon\b/gi,'karon'],
+    [/\bkumain ka na\b/gi,'kaon ka na'],
+    [/\bkain ka na\b/gi,'kaon ka na'],
+    [/\byung mga\b/gi,'ang mga'],
+    [/\bor no pa\b/gi,'o wala pa'],
+    [/\bo no pa\b/gi,'o wala pa'],
+    [/\bmagandang umaga\b/gi,'maayong buntag'],
+    [/\bmagandang hapon\b/gi,'maayong hapon'],
+    [/\bmagandang gabi\b/gi,'maayong gabii'],
+    [/\btechlin\b/gi,'ta']
+  ];
+  var BISAYA_WORDS=[
+    [/\bkumain\b/gi,'kaon'],
+    [/\bkain\b/gi,'kaon'],
+    [/\bhindi\b/gi,'dili'],
+    [/\bbakit\b/gi,'ngano'],
+    [/\bsaan\b/gi,'asa'],
+    [/\bsino\b/gi,'kinsa'],
+    [/\bano\b/gi,'unsa'],
+    [/\bpaano\b/gi,'unsaon'],
+    [/\bkailan\b/gi,'kanus-a'],
+    [/\bilan\b/gi,'pila'],
+    [/\bmagkano\b/gi,'tagpila'],
+    [/\bngayon\b/gi,'karon'],
+    [/\btao\b/gi,'tawo'],
+    [/\bmaganda\b/gi,'nindot'],
+    [/\bmabuti\b/gi,'maayo'],
+    [/\bbahay\b/gi,'balay'],
+    [/\baraw\b/gi,'adlaw'],
+    [/\bumaga\b/gi,'buntag'],
+    [/\bgabi\b/gi,'gabii'],
+    [/\bpaaralan\b/gi,'eskwelahan'],
+    [/\bpagkain\b/gi,'pagkaon']
+  ];
+  function bisayaCleanup(s){
+    var w=words(s),ceb=wordScore(w,W_BISAYA),tl=wordScore(w,W_TAGALOG);
+    var ok=lastLang==='ceb'?lastLangConf>=0.45:lastLang==='mix'?lastLangConf>=0.5&&ceb>0&&ceb>=tl:false;
+    if(!ok)return s;
+    var out=s;
+    BISAYA_PHRASES.forEach(function(p){out=out.replace(p[0],p[1])});
+    BISAYA_WORDS.forEach(function(p){out=out.replace(p[0],p[1])});
+    return out;
+  }
+  function cleanSession(){
+    if(text.value.length<=sessionStart)return;
+    var head=text.value.slice(0,sessionStart),tail=text.value.slice(sessionStart),out=bisayaCleanup(tail);
+    if(out!==tail){text.value=head+out;sync()}
+  }
+
+  function autoDetect(raw){
+    detectBuf.push(raw);
+    var all=words(detectBuf.join(' '));
+    if(all.length>45){all=all.slice(-45);detectBuf=[all.join(' ')]}
+    var d=detectLanguage(all.join(' '));
+    var cd=detectLanguage(raw);
+    if(!d)return;
+    var sd=(cd&&cd.markers>=3)?cd:d;
+    if(sd.markers>=3){
+      if(sd.lang!==lastLang){lastLang=sd.lang;lastLangConf=sd.langConf;if(listening)setStatus(statusBase)}
+      else if(sd.langConf>lastLangConf)lastLangConf=sd.langConf;
+      var canClean=lastLang==='ceb'?lastLangConf>=0.45:lastLang==='mix'?lastLangConf>=0.5:false;
+      if(!canClean)sessionCleaned=false;
+      if(canClean&&!sessionCleaned){sessionCleaned=true;cleanSession()}
+    }
+    var now=Date.now();
+    var mixMode=d.lang==='mix'||sd.lang==='mix';
+    if(mixMode){
+      if(activeGroup!=='fil'&&switchCount<3&&now-lastSwitchAt>=14000){
+        activeGroup='fil';detectBuf=[];lastSwitchAt=now;switchCount++;
+        if(listening){begin(true);lastFinal=Date.now()}
+      }
+      return;
+    }
+    var sw=(sd.markers>=5)?sd:d;
+    if(sw.group===activeGroup)return;
+    if(switchCount>=3)return;
+    if(now-lastSwitchAt<14000)return;
+    if(sw.markers<5||sw.conf<0.6)return;
+    activeGroup=sw.group;
+    detectBuf=[];lastSwitchAt=now;switchCount++;
+    if(listening){begin(true);lastFinal=Date.now()}
+  }
 
   /* ---------- data ---------- */
   var S=null;
@@ -90,9 +194,10 @@
   function count(){var s=text.value.trim(),n=s?s.split(/\s+/).length:0;$('count').textContent=n+(n===1?' word':' words')}
   function openNote(){var n=cur();text.value=n?(n.text||''):'';title.value=n?(n.title||''):'';count()}
   function switchTo(fid,nid){
+    stopSpeaking();
     if(listening)stop();
     S.fid=fid;
-    S.nid=nid;elapsed=0;$('timer').textContent='00:00';statusEl.textContent='Ready to listen';
+    S.nid=nid;elapsed=0;lastLang='';lastLangConf=0;$('timer').textContent='00:00';setStatus('Ready to listen');
     renderAll();openNote();
   }
   function delFolder(f){
@@ -118,7 +223,7 @@
   };
   $('addN').onclick=function(){
     if(listening)stop();
-    S.nid=null;text.value='';title.value='';elapsed=0;$('timer').textContent='00:00';
+    S.nid=null;text.value='';title.value='';elapsed=0;lastLang='';lastLangConf=0;$('timer').textContent='00:00';
     var n=ensure();n.text='';persist();renderAll();text.focus();
   };
   move.onchange=function(){
@@ -171,13 +276,73 @@
   /* ---------- voice ---------- */
   function appendFinal(raw){
     var s=raw.trim();if(!s)return;
-    s=s.charAt(0).toUpperCase()+s.slice(1);
-    if(!/[.!?…。！？]$/.test(s))s+='.';
-    var now=Date.now(),c=text.value.replace(/\s+$/,''),para=c&&(now-lastFinal>8000);
-    text.value=c?c+(para?'\n':' ')+s:s;
-    lastFinal=now;text.scrollTop=text.scrollHeight;sync();
+    var rawText=s;
+    var now=Date.now(),c=text.value.replace(/\s+$/,'');
+    var para=c&&(now-lastFinal>8000);
+    var sentence=c&&(now-lastFinal>3500);
+    var startsNew=!c||para||sentence||/[.!?…。！？]$/.test(c);
+    if(startsNew)s=s.charAt(0).toUpperCase()+s.slice(1);
+    if(!/[.!?…。！？,;:]$/.test(s)){
+      var wc=s.split(/\s+/).length;
+      if(para||sentence||wc>=10)s+='.';
+    }
+    var out=bisayaCleanup(s);
+    text.value=c?c+(para?'\n':' ')+out:out;
+    lastFinal=now;text.scrollTop=text.scrollHeight;sync();autoDetect(rawText);
   }
   function setIcon(id){$('micIcon').innerHTML='<use href="#'+id+'"/>';$('micLbl').textContent=id==='stop'?'Stop recording':'Start recording'}
+
+  /* ---------- read aloud ---------- */
+  var speaking=false,currentSpeak=null;
+  function pickVoice(g){
+    if(!window.speechSynthesis)return null;
+    var voices=window.speechSynthesis.getVoices()||[],i,n;
+    for(i=0;i<voices.length;i++){
+      n=(voices[i].name||'').toLowerCase();
+      if(n.indexOf('natasha')!==-1&&(voices[i].lang||'').toLowerCase().indexOf('en-au')===0)return voices[i];
+    }
+    for(i=0;i<voices.length;i++)if((voices[i].name||'').toLowerCase().indexOf('natasha')!==-1)return voices[i];
+    var prefs=g==='en'?['en-PH','en-US','en-GB','en-AU','en']:['fil-PH','tl-PH','fil','tl','en-PH','en-US'];
+    for(var p=0;p<prefs.length;p++)for(i=0;i<voices.length;i++){
+      var vl=(voices[i].lang||'').toLowerCase(),pl=prefs[p].toLowerCase();
+      if(vl.indexOf(pl)===0)return voices[i];
+    }
+    return null;
+  }
+  function stopSpeaking(){
+    var old=currentSpeak;currentSpeak=null;
+    if(old){old.onend=null;old.onerror=null}
+    speaking=false;
+    if(window.speechSynthesis){try{window.speechSynthesis.cancel()}catch(e){}}
+    if(readBtn){readBtn.classList.remove('on');readBtn.setAttribute('aria-pressed','false');readBtn.setAttribute('aria-label','Read aloud')}
+    if(readLbl)readLbl.textContent='Read';
+  }
+  function readAloud(){
+    if(!window.speechSynthesis||typeof window.SpeechSynthesisUtterance!=='function')return toast('This browser cannot read text aloud');
+    if(speaking){stopSpeaking();return}
+    var body=(text.value||'').trim();
+    if(!body)return toast('Nothing to read yet');
+    var lang=lastLang;
+    if(!lang){
+      var d=detectLanguage(body);
+      if(d&&d.markers)lang=d.lang;
+      else lang=wordScore(words(body),W_ENGLISH)>0?'en':'tl';
+    }
+    var isEn=lang==='en';
+    var u=new window.SpeechSynthesisUtterance((title.value?title.value+'. ':'')+body);
+    var v=pickVoice(isEn?'en':'fil');
+    u.lang=v&&v.lang?v.lang:(isEn?'en-PH':'fil-PH');
+    if(v)u.voice=v;
+    u.rate=1;u.pitch=1;u.volume=1;
+    u.onend=u.onerror=function(){if(currentSpeak===u)stopSpeaking()};
+    try{window.speechSynthesis.cancel()}catch(e){}
+    currentSpeak=u;speaking=true;
+    if(readBtn){readBtn.classList.add('on');readBtn.setAttribute('aria-pressed','true');readBtn.setAttribute('aria-label','Stop reading')}
+    if(readLbl)readLbl.textContent='Stop';
+    try{window.speechSynthesis.speak(u)}catch(e){stopSpeaking();warn('Could not read the text aloud: '+e.message)}
+  }
+  readBtn.onclick=readAloud;
+
   if(!SR){warn('Voice recognition is not supported in this browser. Use Chrome or Edge, and open the page with Live Server (localhost).');mic.disabled=true;mic.style.opacity=.5}
 
   /* ---------- mic level meter (shows if your mic really hears you) ---------- */
@@ -210,28 +375,32 @@
     }).catch(function(){meterBusy=false});
   }
 
-  var LANGCANDS={'en-US':['en-PH','en-US'],'fil-PH':['fil-PH','tl-PH'],'ceb':['fil-PH','tl-PH']},cands=[],curLang='',gotStart=false;
+  var cands=[],curLang='',gotStart=false;
   function failFast(){            /* the session ended right away: try another engine code, then explain */
     if(cands.length){
       curLang=cands.shift();toast('Trying '+curLang+'…');
-      try{rec.abort()}catch(e){}
-      build();gotStart=false;statusEl.textContent='Starting…';
+      var old=rec;rec=null;if(old){try{old.abort()}catch(e){}}
+      build();gotStart=false;setStatus('Starting…');
       try{rec.start()}catch(e){stop(true)}
       return;
     }
     wantStop=true;
-    warn('Voice recognition stopped right away. Click Allow for the microphone (lock icon in the address bar), check your internet, and try Google Chrome. This browser may not support the chosen language.');
+    warn('Voice recognition stopped right away. Click Allow for the microphone (lock icon in the address bar), check your internet, and try Google Chrome. This browser may not support the detected language.');
     stop(true);
   }
   function build(){
     var r=new SR();rec=r;var t0=Date.now();
-    r.onstart=function(){gotStart=true;t0=Date.now();if(listening){statusEl.textContent='Listening…';startMeter()}};
-    r.continuous=true;r.interimResults=true;r.lang=curLang||ENGINE[langSel.value]||'en-US';
+    r.onstart=function(){gotStart=true;t0=Date.now();if(listening){setStatus('Listening…');startMeter()}};
+    r.continuous=true;r.interimResults=true;r.maxAlternatives=3;r.lang=curLang||ENGINES[activeGroup][0]||'fil-PH';
     r.onresult=function(e){
       var live='';
       for(var i=e.resultIndex;i<e.results.length;i++){
         var x=e.results[i];
-        if(x.isFinal)appendFinal(x[0].transcript);else live+=x[0].transcript;
+        if(x.isFinal){
+          var best=x[0].transcript,bestScore=altScore(best);
+          for(var j=1;j<x.length;j++){var sc=altScore(x[j].transcript);if(sc>bestScore){bestScore=sc;best=x[j].transcript}}
+          appendFinal(best);
+        }else live+=x[0].transcript;
       }
       interim.textContent=listening?live:'';
     };
@@ -240,9 +409,10 @@
         wantStop=true;
         warn('Microphone is blocked. Click the lock icon in the address bar, allow the microphone, and open the page through Live Server (localhost).');
       }else if(e.error==='language-not-supported'){
-        wantStop=true;warn('This browser can’t recognize that language. Choose another one from the language menu.');
-      }else if(e.error==='network'){warn('The speech service could not be reached. Check your internet connection. Chrome usually works better than Edge for voice recognition.')}else if(e.error==='no-speech'){statusEl.textContent='Listening… no speech heard yet'}
-      else if(e.error!=='aborted'){statusEl.textContent='Error: '+e.error}
+        wantStop=true;
+        warn('This browser could not use the automatic language engine. Try again, or use Google Chrome.');
+      }else if(e.error==='network'){warn('The speech service could not be reached. Check your internet connection. Chrome usually works better than Edge for voice recognition.')}else if(e.error==='no-speech'){setStatus('Listening… no speech heard yet')}
+      else if(e.error!=='aborted'){setStatus('Error: '+e.error)}
     };
     r.onend=function(){
       if(r!==rec)return;
@@ -259,6 +429,10 @@
   var pending=null,starting=false;
   function start(){
     if(!SR||starting)return;
+    stopSpeaking();
+    activeGroup='fil';switchCount=0;lastSwitchAt=0;detectBuf=[];lastLang='';lastLangConf=0;sessionCleaned=false;sessionStart=text.value.length;
+    var pre=detectLanguage(text.value||'');
+    if(pre&&pre.markers>=5&&pre.conf>=0.6){activeGroup=pre.group;lastLang=pre.lang;lastLangConf=pre.langConf}
     if(pending){                                  /* an old session is still closing: close it first */
       var p=pending;pending=null;p.onresult=null;try{p.abort()}catch(e){}
       starting=true;setTimeout(function(){starting=false;begin()},300);return;
@@ -269,18 +443,18 @@
     $('warn').style.display='none';
     if(FILE_MODE){fileWarning();return}
     ensure();
-    if(rec){try{rec.abort()}catch(e){}rec=null}
-    cands=(LANGCANDS[langSel.value]||[ENGINE[langSel.value]||'en-US']).slice();curLang=cands.shift();gotStart=false;statusEl.textContent='Starting…';
+    var old=rec;rec=null;if(old){try{old.abort()}catch(e){}}
+    cands=(ENGINES[activeGroup]||ENGINES.fil).slice();curLang=cands.shift();gotStart=false;setStatus('Starting…');
     build();wantStop=false;
     try{rec.start()}catch(e){
       rec=null;
       if(!retry){starting=true;setTimeout(function(){starting=false;begin(true)},300)}
-      else statusEl.textContent='Could not start. Please click again.';
+      else setStatus('Could not start. Please click again.');
       return;
     }
     listening=true;startedAt=Date.now()-elapsed*1000;lastFinal=0;
     app.classList.add('live');mic.setAttribute('aria-label','Stop recording');setIcon('stop');
-    setTimeout(function(){if(listening&&!gotStart)statusEl.textContent='Waiting for the microphone… click Allow in the address bar.'},3500);
+    setTimeout(function(){if(listening&&!gotStart)setStatus('Waiting for the microphone… click Allow in the address bar.')},3500);
     clearInterval(tick);
     tick=setInterval(function(){elapsed=Math.floor((Date.now()-startedAt)/1000);$('timer').textContent=fmt(elapsed)},500);
   }
@@ -289,7 +463,7 @@
     clearInterval(tick);                       /* UI stops right away */
     stopMeter();
     app.classList.remove('live');mic.setAttribute('aria-label','Start recording');setIcon('mic');
-    statusEl.textContent=elapsed?'Stopped · '+fmt(elapsed)+' recorded':'Ready to listen';
+    setStatus(elapsed?'Stopped · '+fmt(elapsed)+' recorded':'Ready to listen');
     interim.textContent='';
     var r=rec;rec=null;
     if(r&&!fromEnd){
@@ -302,7 +476,6 @@
   function requestStart(){
     if(!SR)return;
     if(FILE_MODE){fileWarning();return}
-    if(!langChosen){openLangDlg();return}
     start();
   }
   function toggle(){try{listening?stop():requestStart()}catch(err){warn('Error: '+err.message)}}
@@ -317,12 +490,11 @@
 
   /* ---------- start ---------- */
   try{
-    var l=localStorage.getItem('ln_lang');
-    if(l&&ENGINE[l]){langSel.value=l;langChosen=true}else{langSel.value=''}
+    localStorage.removeItem('ln_lang');localStorage.removeItem('ln_voice');
     var t=localStorage.getItem('ln_theme');if(t)document.documentElement.setAttribute('data-theme',t);
-  }catch(e){langSel.value=''}
+  }catch(e){}
   S.nid=null;   /* always open on a blank page */
-  renderAll();openNote();renderLang();
+  renderAll();openNote();
   if(FILE_MODE)fileWarning();
   
 })();

@@ -21,6 +21,7 @@
   <symbol id="list" viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/></symbol>
   <symbol id="moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></symbol>
   <symbol id="pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4zM13.5 6.5l4 4"/></symbol>
+  <symbol id="volume" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></symbol>
 </svg>
 
 <div class="app" id="app">
@@ -36,9 +37,7 @@
     <p class="warn" id="warn"></p>
     <section class="card hero">
       <h1>Voice-to-text note taker — turn a spoken lecture into written notes</h1>
-      <p class="sub">Choose a language, press start, and speak. Your words turn into notes.</p>
-      <div class="chips" id="langOpts" role="radiogroup" aria-label="Spoken language"></div>
-      <select id="lang" hidden aria-hidden="true"></select>
+      <p class="sub">Press start</p>
       <button type="button" class="rec-btn" id="micBtn"><svg class="i" id="micIcon"><use href="#mic"/></svg><span id="micLbl">Start recording</span></button>
       <div class="timer" id="timer">00:00</div>
       <div class="status" id="status">Ready to listen</div>
@@ -51,6 +50,7 @@
         <select id="move" aria-label="Move note to folder" title="Move to folder"></select>
         <button class="btn" id="bullets" aria-label="Bullets"><svg class="i"><use href="#list"/></svg><span class="lb">Bullets</span></button>
         <button class="btn" id="copyBtn" aria-label="Copy"><svg class="i"><use href="#copy"/></svg><span class="lb">Copy</span></button>
+        <button class="btn" id="readBtn" aria-label="Read aloud" aria-pressed="false"><svg class="i"><use href="#volume"/></svg><span class="lb" id="readLbl">Read</span></button>
         <button class="btn" id="dl" aria-label="Download"><svg class="i"><use href="#down"/></svg><span class="lb">Download</span></button>
         <button class="btn danger" id="del" aria-label="Delete note"><svg class="i"><use href="#trash"/></svg></button>
       </div>
@@ -71,11 +71,6 @@
   <p class="tip">Use the download icon on a folder to get all its notes in one file.</p>
 </aside>
 
-<dialog id="langDlg">
-  <h2>Which language will the lecture be in?</h2>
-  <p>The browser can’t guess the language by itself, so choose one first. Bisaya uses the Filipino voice engine, so some words may come out wrong.</p>
-  <div class="grid" id="langGrid"></div>
-</dialog>
 <div class="toast" id="toast" role="status"></div>
 <script src="script.js"></script>
 </body>
